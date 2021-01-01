@@ -5,8 +5,11 @@
 
     builders.importCargo =
       { lockFile, pkgs }:
-      let lockFile' = builtins.fromTOML (builtins.readFile lockFile); in
-      rec {
+      let
+        lockFile' = builtins.fromTOML (builtins.readFile lockFile);
+        registry = "registry+https://github.com/rust-lang/crates.io-index";
+        registryName = "github.com-1ecc6299db9ec823";
+      in rec {
 
         # Fetch and unpack the crates specified in the lock file.
         unpackedCrates = map
@@ -14,7 +17,6 @@
 
             let
               isGit = builtins.match ''git\+(.*)\?rev=([0-9a-f]+)(#.*)?'' pkg.source;
-              registry = "registry+https://github.com/rust-lang/crates.io-index";
             in
 
             if pkg.source == registry then
@@ -72,28 +74,14 @@
         # sources.
         vendorDir = pkgs.runCommand "cargo-vendor-dir" {}
           ''
-            mkdir -p $out/vendor
+            outSrc=
 
-            cat > $out/vendor/config <<EOF
-            [source.crates-io]
-            replace-with = "vendored-sources"
-
-            [source.vendored-sources]
-            directory = "vendor"
-            EOF
+            touch $out/.package-cache
 
             declare -A keysSeen
 
             for i in ${toString unpackedCrates}; do
-              ln -s $i $out/vendor/$(basename "$i" | cut -c 34-)
-              if [[ -e "$i/.cargo-config" ]]; then
-                # Ensure we emit TOML keys only once.
-                key=$(sed 's/\[source\."\(.*\)"\]/\1/; t; d' < "$i/.cargo-config")
-                if [[ -z ''${keysSeen[$key]} ]]; then
-                  keysSeen[$key]=1
-                  cat "$i/.cargo-config" >> $out/vendor/config
-                fi
-              fi
+              ln -s $i $outSrc/$(basename "$i" | cut -c 34-)
             done
           '';
 
@@ -102,13 +90,9 @@
         # because then we end up with a runtime dependency on it.
         cargoHome = pkgs.makeSetupHook {}
           (pkgs.writeScript "make-cargo-home" ''
-            if [[ -z "''${CARGO_HOME-}" || "''${CARGO_HOME-}" = /build ]]; then
-              export CARGO_HOME=$TMPDIR/vendor
-              # FIXME: work around Rust 1.36 wanting a $CARGO_HOME/.package-cache file.
-              #ln -s ${vendorDir}/vendor $CARGO_HOME
-              cp -prd ${vendorDir}/vendor $CARGO_HOME
-              chmod -R u+w $CARGO_HOME
-            fi
+            mkdir -p "$CARGO_HOME/registry/src"
+            touch "$CARGO_HOME/.package-cache"
+            ln -s ${vendorDir}/vendor "$CARGO_HOME/registry/src/${registryName}"
           '');
       };
 
